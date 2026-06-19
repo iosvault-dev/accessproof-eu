@@ -229,6 +229,47 @@ GROWTH_URL = os.environ.get("GROWTH_CHECKOUT_URL", "#pricing")
 PRO_URL = os.environ.get("PRO_CHECKOUT_URL", "#pricing")
 CONTACT = os.environ.get("CONTACT_EMAIL", "hello@accessproof.eu")
 
+# ===== B005 funnel instrumentation: server-side, privacy-first, no third-party =====
+# In-memory counters + best-effort append-only CSV + structured stdout logs, surfaced
+# at GET /metrics for the daily loop to snapshot. NO IP, NO cookies, NO user-agent, NO PII.
+# NOTE: on Render free tier the filesystem is ephemeral and the dyno sleeps, so EVENTS_LOG
+# and in-memory counts reset on each cold start -> /metrics reflects activity "since boot".
+# The daily loop curls /metrics and records the snapshot, giving a per-day series. Durable
+# cumulative counting needs an always-on dyno (Render Starter) or an external store = future
+# owner option; this MVP makes the funnel OBSERVABLE without any paid tool.
+import threading
+_EVENT_NAMES = (
+    "visit_home", "visit_scan", "scan_start", "scan_success", "scan_error",
+    "report_view", "checkout_click_growth", "checkout_click_pro",
+    "agency_cta_click", "unsubscribe_visit", "healthz_ok")
+_EVENTS = {k: 0 for k in _EVENT_NAMES}
+_EVENTS_LOCK = threading.Lock()
+_BOOT_TS = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+EVENTS_LOG = os.environ.get("EVENTS_LOG", "/tmp/accessproof_events.csv")
+
+
+def log_event(event: str, path: str = "", detail: str = "") -> None:
+    """Count one funnel event. Never raises (instrumentation must not break a request).
+    `detail` only ever holds a scanned domain — never anything personal."""
+    try:
+        with _EVENTS_LOCK:
+            if event in _EVENTS:
+                _EVENTS[event] += 1
+        ts = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        row = f"{ts},{event},{path},{detail}"
+        print(f"[event] {row}", flush=True)
+        try:
+            new = not os.path.exists(EVENTS_LOG)
+            with open(EVENTS_LOG, "a", encoding="utf-8") as fh:
+                if new:
+                    fh.write("ts,event,path,detail\n")
+                fh.write(row + "\n")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 SEV_COLOR = {"critical": "#b3261e", "serious": "#b8500f",
              "moderate": "#8a6d00", "minor": "#666"}
 DISCLAIMER = ("AccessProof EU provides automated accessibility scanning, monitoring, "
@@ -286,8 +327,9 @@ def landing() -> str:
     body = f"""
 <div class="hero">
   <h1>See your Shopify store's accessibility issues in 15 seconds.</h1>
-  <p>Free automated scan. Monthly monitoring and dated evidence reports for teams
-     selling to EU shoppers &mdash; built for the European Accessibility Act era.</p>
+  <p>Free automated scan. Then monthly dated evidence reports that find issues, track your
+     progress, and keep a proof trail of your accessibility work &mdash; for stores selling
+     to EU shoppers in the European Accessibility Act era.</p>
   <form class="scanbox" action="/scan" method="get">
     <input name="url" placeholder="yourstore.com" autocomplete="off" required>
     <button class="btn" type="submit">Scan my store</button>
@@ -308,13 +350,19 @@ def landing() -> str:
 <div class="price">
   <div class="tier fav"><div>Growth</div><div class="amt">$89<span style="font-size:15px">/mo</span></div>
     <p>Monthly monitoring, up to 25 pages, monthly evidence PDF, issue history, email alerts.</p>
-    <a class="btn" href="{html.escape(GROWTH_URL)}">Start Growth</a></div>
+    <a class="btn" href="/go/growth">Start Growth</a></div>
   <div class="tier"><div>Pro</div><div class="amt">$149<span style="font-size:15px">/mo</span></div>
     <p>Weekly monitoring, up to 100 pages, priority regression alerts, expanded reports.</p>
-    <a class="btn" href="{html.escape(PRO_URL)}">Start Pro</a></div>
+    <a class="btn" href="/go/pro">Start Pro</a></div>
 </div>
 <p class="muted">7-day free trial. Cancel anytime. AccessProof helps you find, fix and document
    accessibility &mdash; it does not provide legal advice or guarantee compliance.</p>
+
+<div class="tier" style="margin:14px 0 30px;border-style:dashed">
+  <strong>Manage reports for multiple Shopify clients?</strong>
+  <p class="muted" style="font-size:15px;color:#475">Agencies &amp; multi-store operators: dated monthly
+     evidence reports across your whole client portfolio, in one place. Portfolio plans from $499/mo.</p>
+  <a class="btn" href="/go/agency">Talk to us about portfolio plans</a></div>
 """
     return page(body)
 
@@ -338,13 +386,14 @@ def report_page(result: dict) -> str:
 <div class="disc">{DISCLAIMER}</div>
 <div class="tier fav" style="margin:8px 0 30px"><strong>Keep this monitored.</strong>
   AccessProof re-scans monthly, tracks regressions and generates a dated evidence PDF.
-  <div style="margin-top:12px"><a class="btn" href="{html.escape(GROWTH_URL)}">Start monitoring &mdash; $89/mo</a></div></div>
+  <div style="margin-top:12px"><a class="btn" href="/go/growth">Start monitoring &mdash; $89/mo</a></div></div>
 """
     return page(body, title=f"Accessibility report - {result['final_url']}")
 
 
 @app.get("/")
 def home():
+    log_event("visit_home", "/")
     return landing()
 
 
@@ -352,20 +401,64 @@ def home():
 def do_scan():
     url = (request.args.get("url") or "").strip()
     if not url:
+        log_event("visit_scan", "/scan")
         return landing()
+    log_event("scan_start", "/scan", detail=url)
     try:
         result = scan(url)
     except Exception as e:
+        log_event("scan_error", "/scan", detail=url)
         msg = (f"<div class='hero'><h1>Couldn't scan that URL</h1>"
                f"<p class='muted'>{html.escape(str(e))}</p>"
                f"<p><a class='btn' href='/'>Try again</a></p></div>")
         return Response(page(msg), status=200)
+    log_event("scan_success", "/scan", detail=result.get("final_url", url))
+    log_event("report_view", "/scan", detail=result.get("final_url", url))
     return report_page(result)
 
 
 @app.get("/healthz")
 def healthz():
+    log_event("healthz_ok", "/healthz")
     return {"ok": True}
+
+
+@app.get("/metrics")
+def metrics():
+    """Funnel counters snapshot for the daily execution loop. No PII."""
+    ts = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    with _EVENTS_LOCK:
+        counters = dict(_EVENTS)
+    return {"boot": _BOOT_TS, "now": ts, "counters": counters}
+
+
+@app.get("/go/<dest>")
+def go(dest):
+    """Log checkout/agency click intent server-side, then 302 to the real target.
+    Keeps the Stripe Payment Links intact while making clicks observable."""
+    targets = {
+        "growth": GROWTH_URL,
+        "pro": PRO_URL,
+        "agency": f"mailto:{CONTACT}?subject=AccessProof%20portfolio%20plan",
+    }
+    events = {"growth": "checkout_click_growth", "pro": "checkout_click_pro",
+              "agency": "agency_cta_click"}
+    target = targets.get(dest)
+    if not target:
+        return Response("Unknown destination", status=404)
+    log_event(events[dest], f"/go/{dest}")
+    return Response(status=302, headers={"Location": target})
+
+
+@app.get("/unsubscribe")
+def unsubscribe():
+    """Web unsubscribe confirmation (logged). Outreach currently uses a mailto unsub;
+    wiring this URL into the List-Unsubscribe header is a future, separate step."""
+    log_event("unsubscribe_visit", "/unsubscribe")
+    body = ("<div class='hero'><h1>You're unsubscribed</h1>"
+            "<p class='muted'>We won't email this address again. If anything still "
+            "arrives, reply 'unsubscribe' and we'll remove it.</p></div>")
+    return Response(page(body, title="Unsubscribe - AccessProof EU"), status=200)
 
 
 if __name__ == "__main__":
