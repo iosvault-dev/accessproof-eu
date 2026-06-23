@@ -225,9 +225,11 @@ from flask import Flask, request, Response
 
 app = Flask(__name__)
 
+FOUNDING_URL = os.environ.get("FOUNDING_CHECKOUT_URL", "#pricing")
 GROWTH_URL = os.environ.get("GROWTH_CHECKOUT_URL", "#pricing")
 PRO_URL = os.environ.get("PRO_CHECKOUT_URL", "#pricing")
 CONTACT = os.environ.get("CONTACT_EMAIL", "hello@accessproof.eu")
+SITE_URL = os.environ.get("SITE_URL", "https://accessproof-eu.onrender.com").rstrip("/")
 
 # ===== B005 funnel instrumentation: server-side, privacy-first, no third-party =====
 # In-memory counters + best-effort append-only CSV + structured stdout logs, surfaced
@@ -240,7 +242,8 @@ CONTACT = os.environ.get("CONTACT_EMAIL", "hello@accessproof.eu")
 import threading
 _EVENT_NAMES = (
     "visit_home", "visit_scan", "scan_start", "scan_success", "scan_error",
-    "report_view", "checkout_click_growth", "checkout_click_pro",
+    "report_view", "sample_view", "seo_page_view",
+    "checkout_click_founding", "checkout_click_growth", "checkout_click_pro",
     "agency_cta_click", "unsubscribe_visit", "healthz_ok")
 _EVENTS = {k: 0 for k in _EVENT_NAMES}
 _EVENTS_LOCK = threading.Lock()
@@ -307,67 +310,115 @@ th{font-size:11px;text-transform:uppercase;color:#8a939c}
 .score{font-size:46px;font-weight:800}
 .disc{margin:26px 0;padding:14px 16px;background:#f6f7f5;border-radius:10px;font-size:12px;color:#566}
 footer{border-top:1px solid #eef0f2;margin-top:44px;padding:24px 0;color:#8a939c;font-size:13px}
-@media(max-width:680px){.grid3,.price{grid-template-columns:1fr}.hero h1{font-size:30px}.scanbox{flex-direction:column}}
+.urgent{background:#fff5f0;border:1px solid #f3c8b3;border-radius:12px;padding:13px 16px;margin:18px auto;max-width:660px;font-size:14px;color:#7a3210;text-align:center}
+.urgent strong{color:#a8350c}
+.btn.alt{background:#fff;color:#101418;border:1.5px solid #cdd3da}
+.btn.alt:hover{background:#f4f6f8}
+.tier.solo{max-width:440px;margin:22px auto}
+.badge{display:inline-block;background:#eef4ff;color:#1463ff;border-radius:999px;padding:3px 11px;font-size:12px;font-weight:700;margin-bottom:8px}
+.faq details{border-bottom:1px solid #eef0f2;padding:12px 2px}
+.faq summary{font-weight:600;cursor:pointer}
+.faq p{color:#475;margin:.5em 0 0}
+.cap{background:#f6f8fa;border-left:3px solid #1463ff;border-radius:0 10px 10px 0;padding:14px 18px;margin:14px 0;font-size:17px}
+.seo-cta{display:flex;gap:10px;max-width:560px;margin:22px 0}
+.seo-cta input{flex:1;padding:14px 15px;border:1.5px solid #cdd3da;border-radius:10px;font-size:16px}
+.crumb{font-size:13px;color:#8a939c;margin:8px 0}
+@media(max-width:680px){.grid3,.price{grid-template-columns:1fr}.hero h1{font-size:30px}.scanbox,.seo-cta{flex-direction:column}}
 """
 
 
-def page(body: str, title="AccessProof EU") -> str:
+def page(body: str, title="AccessProof EU - independent Shopify accessibility evidence",
+         desc="Free Shopify EAA readiness check. Independent, dated accessibility evidence "
+              "reports and monthly monitoring for stores selling to the EU.",
+         canonical="/", extra_head="") -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{html.escape(title)}</title><style>{BASE_CSS}</style></head><body>
-<div class="wrap"><div class="nav"><div class="brand">AccessProof&nbsp;EU</div>
-<div><a href="/#how">How it works</a> &nbsp; <a href="/#pricing">Pricing</a></div></div>
+<title>{html.escape(title)}</title>
+<meta name="description" content="{html.escape(desc)}">
+<link rel="canonical" href="{SITE_URL}{canonical}">
+<meta property="og:title" content="{html.escape(title)}">
+<meta property="og:description" content="{html.escape(desc)}">
+<meta property="og:type" content="website"><meta property="og:url" content="{SITE_URL}{canonical}">
+{extra_head}<style>{BASE_CSS}</style></head><body>
+<div class="wrap"><div class="nav"><div class="brand"><a href="/" style="color:inherit">AccessProof&nbsp;EU</a></div>
+<div><a href="/#how">How&nbsp;it&nbsp;works</a> &nbsp; <a href="/shopify-eaa-readiness-check">EAA&nbsp;check</a> &nbsp; <a href="/#pricing">Pricing</a> &nbsp; <a href="/sample-report">Sample</a></div></div>
 {body}
-<footer>AccessProof EU &middot; automated accessibility monitoring &amp; evidence reports
-&middot; <a href="mailto:{CONTACT}">{CONTACT}</a><br><span class="muted">{DISCLAIMER}</span>
+<footer>AccessProof EU &middot; independent automated accessibility monitoring &amp; dated evidence reports
+&middot; <a href="mailto:{CONTACT}">{CONTACT}</a><br>
+<span class="muted"><a href="/shopify-eaa-readiness-check">EAA readiness</a> &middot;
+<a href="/eaa-compliance-shopify">EAA &amp; Shopify</a> &middot;
+<a href="/bfsg-shopify">BFSG (Germany)</a> &middot;
+<a href="/shopify-accessibility-monitoring">Monitoring</a></span><br>
+<span class="muted">{DISCLAIMER}</span>
 </footer></div></body></html>"""
 
 
 def landing() -> str:
+    jsonld = ('<script type="application/ld+json">'
+              '{"@context":"https://schema.org","@type":"SoftwareApplication",'
+              '"name":"AccessProof EU","applicationCategory":"BusinessApplication",'
+              '"operatingSystem":"Web","offers":{"@type":"Offer","price":"0","priceCurrency":"USD",'
+              '"description":"Free Shopify accessibility (EAA) readiness scan"},'
+              '"description":"Independent, dated accessibility evidence reports and monthly '
+              'monitoring for Shopify stores selling to the EU under the European Accessibility Act."}'
+              '</script>')
     body = f"""
 <div class="hero">
-  <h1>See your Shopify store's accessibility issues in 15 seconds.</h1>
-  <p>Free automated scan. Then monthly dated evidence reports that find issues, track your
-     progress, and keep a proof trail of your accessibility work &mdash; for stores selling
-     to EU shoppers in the European Accessibility Act era.</p>
+  <span class="badge">For Shopify stores selling to the EU</span>
+  <h1>Free Shopify EAA readiness check</h1>
+  <p>Get a dated accessibility evidence report for your store in under a minute.
+     <strong>No overlay. No install. No legal advice.</strong></p>
   <form class="scanbox" action="/scan" method="get">
     <input name="url" placeholder="yourstore.com" autocomplete="off" required>
-    <button class="btn" type="submit">Scan my store</button>
+    <button class="btn" type="submit">Scan my store free</button>
   </form>
-  <div class="muted">No signup. No overlay widget. Real findings you can act on.</div>
+  <div class="muted">Independent, third-party scan &middot; real findings you can act on &middot;
+     <a href="/sample-report">see a sample report</a></div>
 </div>
 
+<div class="urgent">&#9888; <strong>EU accessibility enforcement is here.</strong> A French court has
+  ordered a major retailer to make its site accessible or pay a fine for every day it is late, and
+  regulators in several EU countries are now inspecting online stores. Independent, dated proof of
+  where your store stands puts you on far stronger footing &mdash; we give you that proof.</div>
+
 <div id="how" class="grid3">
-  <div class="card"><h3>1 &middot; Scan</h3>Enter your storefront URL. We run high-confidence
-     automated checks (missing alt text, unlabeled fields, nameless buttons, page language and more).</div>
-  <div class="card"><h3>2 &middot; Monitor</h3>We re-scan every month, track regressions, and
-     alert you when new high-severity issues appear after a theme or app change.</div>
-  <div class="card"><h3>3 &middot; Document</h3>Get a dated PDF evidence report showing the
-     accessibility work you're doing &mdash; clean records for your team.</div>
+  <div class="card"><h3>1 &middot; Scan</h3>Enter your storefront URL. We run high-confidence automated
+     checks (missing alt text, unlabeled fields, nameless buttons, page language and more).</div>
+  <div class="card"><h3>2 &middot; Monitor</h3>We re-scan every month, track regressions, and flag new
+     high-severity issues after a theme or app change.</div>
+  <div class="card"><h3>3 &middot; Document</h3>You get a dated evidence report showing the accessibility
+     work you are doing &mdash; an independent, time-stamped record for your team.</div>
 </div>
 
 <h2 id="pricing">Pricing</h2>
-<div class="price">
-  <div class="tier fav"><div>Growth</div><div class="amt">$89<span style="font-size:15px">/mo</span></div>
-    <p>Monthly monitoring, up to 25 pages, monthly evidence PDF, issue history, email alerts.</p>
-    <a class="btn" href="/go/growth">Start Growth</a></div>
-  <div class="tier"><div>Pro</div><div class="amt">$149<span style="font-size:15px">/mo</span></div>
-    <p>Weekly monitoring, up to 100 pages, priority regression alerts, expanded reports.</p>
-    <a class="btn" href="/go/pro">Start Pro</a></div>
+<div class="tier fav solo">
+  <span class="badge">Founding offer</span>
+  <div>Founding Monitor</div><div class="amt">$29<span style="font-size:15px">/mo</span></div>
+  <p>Monthly automated scan + a dated evidence report for one Shopify store, with regression alerts.
+     Cancel anytime. Founding price while we refine the product.</p>
+  <a class="btn" href="/go/founding">Start monitoring &mdash; $29/mo</a>
+  <div class="muted" style="margin-top:10px">Or <a href="/scan">run the free scan first</a>.</div>
 </div>
-<p class="muted">7-day free trial. Cancel anytime. AccessProof helps you find, fix and document
-   accessibility &mdash; it does not provide legal advice or guarantee compliance.</p>
+<p class="muted" style="text-align:center">Bigger store or more frequent checks? Growth and Pro plans
+   arrive as we grow. AccessProof is an independent evidence layer &mdash; not an overlay widget, and
+   not legal advice. It helps you find, fix and document accessibility.</p>
 
-<div class="tier" style="margin:14px 0 30px;border-style:dashed">
-  <strong>Manage reports for multiple Shopify clients?</strong>
-  <p class="muted" style="font-size:15px;color:#475">Agencies &amp; multi-store operators: dated monthly
-     evidence reports across your whole client portfolio, in one place. Portfolio plans from $499/mo.</p>
-  <a class="btn" href="/go/agency">Talk to us about portfolio plans</a></div>
+<div class="tier" style="margin:18px 0 10px;border-style:dashed">
+  <strong>Run a Shopify agency or manage multiple stores?</strong>
+  <p class="muted" style="font-size:15px;color:#475">Add a recurring accessibility evidence service to your
+     care plans: independent dated reports across your whole client portfolio, in one place.
+     Portfolio plans from $499/mo.</p>
+  <a class="btn alt" href="/go/agency">Talk to us about portfolio plans</a></div>
+
+<p class="crumb">Learn more: <a href="/shopify-eaa-readiness-check">Shopify EAA readiness check</a> &middot;
+  <a href="/eaa-compliance-shopify">EAA compliance for Shopify</a> &middot;
+  <a href="/bfsg-shopify">BFSG for Shopify (Germany)</a> &middot;
+  <a href="/shopify-accessibility-monitoring">Shopify accessibility monitoring</a></p>
 """
-    return page(body)
+    return page(body, extra_head=jsonld)
 
 
-def report_page(result: dict) -> str:
+def report_page(result: dict, banner: str = "") -> str:
     rows = ""
     for i in result["issues"]:
         rows += f"""<tr>
@@ -377,6 +428,7 @@ def report_page(result: dict) -> str:
           <td>{html.escape(i.get('fix',''))}</td></tr>"""
     body = f"""
 <p><a href="/">&larr; Scan another store</a></p>
+{banner}
 <div class="scoreband"><div class="score">{result['score']}<span style="font-size:18px">/100</span></div>
   <div><strong>{html.escape(result['final_url'])}</strong><br>
   <span class="muted">Scanned {result['scanned_at']} &middot; {result['issue_count']} issue group(s) &middot;
@@ -385,10 +437,13 @@ def report_page(result: dict) -> str:
 <tbody>{rows or '<tr><td colspan=4>No high-confidence automated issues found on this page. Nice. Deeper pages may still have issues &mdash; monthly monitoring catches regressions.</td></tr>'}</tbody></table>
 <div class="disc">{DISCLAIMER}</div>
 <div class="tier fav" style="margin:8px 0 30px"><strong>Keep this monitored.</strong>
-  AccessProof re-scans monthly, tracks regressions and generates a dated evidence PDF.
-  <div style="margin-top:12px"><a class="btn" href="/go/growth">Start monitoring &mdash; $89/mo</a></div></div>
+  AccessProof re-scans monthly, tracks regressions and generates a dated, independent evidence report.
+  <div style="margin-top:12px"><a class="btn" href="/go/founding">Start monitoring &mdash; $29/mo</a>
+  &nbsp; <a class="btn alt" href="/sample-report">See a sample report</a></div></div>
 """
-    return page(body, title=f"Accessibility report - {result['final_url']}")
+    return page(body, title=f"Accessibility report - {result['final_url']}",
+                desc="Automated accessibility scan result with WCAG references and suggested fixes.",
+                canonical="/scan")
 
 
 @app.get("/")
@@ -437,12 +492,13 @@ def go(dest):
     """Log checkout/agency click intent server-side, then 302 to the real target.
     Keeps the Stripe Payment Links intact while making clicks observable."""
     targets = {
+        "founding": FOUNDING_URL,
         "growth": GROWTH_URL,
         "pro": PRO_URL,
         "agency": f"mailto:{CONTACT}?subject=AccessProof%20portfolio%20plan",
     }
-    events = {"growth": "checkout_click_growth", "pro": "checkout_click_pro",
-              "agency": "agency_cta_click"}
+    events = {"founding": "checkout_click_founding", "growth": "checkout_click_growth",
+              "pro": "checkout_click_pro", "agency": "agency_cta_click"}
     target = targets.get(dest)
     if not target:
         return Response("Unknown destination", status=404)
@@ -459,6 +515,229 @@ def unsubscribe():
             "<p class='muted'>We won't email this address again. If anything still "
             "arrives, reply 'unsubscribe' and we'll remove it.</p></div>")
     return Response(page(body, title="Unsubscribe - AccessProof EU"), status=200)
+
+
+@app.get("/sample-report")
+def sample_report():
+    log_event("sample_view", "/sample-report")
+    demo = {
+        "url": "demo-store.example", "final_url": "https://demo-store.example",
+        "scanned_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "score": 71, "issue_count": 4,
+        "issues": [
+            dict(severity="critical", confidence="high", outreach_safe=True,
+                 wcag="1.1.1 Non-text Content", title="7 images missing alt text",
+                 impact="Screen-reader shoppers hear nothing for these images; on product images this can block a purchase.",
+                 fix="Add descriptive alt text to content images; use alt=\"\" for decorative ones. In Shopify, product image alt text is editable per image in the admin.",
+                 count=7),
+            dict(severity="serious", confidence="high", outreach_safe=True,
+                 wcag="4.1.2 / 3.3.2 Labels", title="2 form fields without an accessible label",
+                 impact="Header search and newsletter inputs can't be identified by assistive tech.",
+                 fix="Associate each field with a <label for> or add an aria-label.", count=2),
+            dict(severity="serious", confidence="high", outreach_safe=True,
+                 wcag="2.4.4 / 4.1.2 Name, Role, Value", title="3 links/buttons with no accessible name",
+                 impact="Icon-only cart and menu controls are announced as just \"button\".",
+                 fix="Add visually-hidden text or an aria-label, e.g. <button aria-label=\"Open cart\">.",
+                 count=3),
+            dict(severity="serious", confidence="high", outreach_safe=True,
+                 wcag="3.1.1 Language of Page", title="Page is missing a language declaration",
+                 impact="Screen readers may read content with the wrong pronunciation rules.",
+                 fix="Set a language on the root element, e.g. <html lang=\"en\">; in Shopify this lives in theme.liquid.",
+                 count=1),
+        ],
+    }
+    demo["outreach_findings"] = [i for i in demo["issues"] if i["outreach_safe"]]
+    banner = ('<div class="badge">Sample report</div><p class="muted" style="margin-top:0">This is an '
+              'anonymized example of the dated evidence report you receive. '
+              '<a href="/scan">Run the free scan</a> to see your own store.</p>')
+    return Response(report_page(demo, banner=banner), status=200)
+
+
+# ===== B037: SEO / GEO content pages (answer-capsule + table + FAQ schema) =====
+def _faq_jsonld(faqs) -> str:
+    items = ",".join(
+        '{"@type":"Question","name":%s,"acceptedAnswer":{"@type":"Answer","text":%s}}'
+        % (json.dumps(q), json.dumps(a)) for q, a in faqs)
+    return ('<script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"FAQPage","mainEntity":['
+            + items + ']}</script>')
+
+
+def seo_page(slug, title, desc, h1, capsule_html, table_head, table_rows, faqs,
+             intro_html="") -> str:
+    rows = "".join(
+        f"<tr><td>{html.escape(a)}</td><td>{html.escape(b)}</td></tr>" for a, b in table_rows)
+    faq_html = "".join(
+        f"<details><summary>{html.escape(q)}</summary><p>{html.escape(a)}</p></details>"
+        for q, a in faqs)
+    body = f"""
+<p class="crumb"><a href="/">Home</a> &rsaquo; {html.escape(h1)}</p>
+<h1>{html.escape(h1)}</h1>
+<div class="cap">{capsule_html}</div>
+{intro_html}
+<form class="seo-cta" action="/scan" method="get">
+  <input name="url" placeholder="yourstore.com" autocomplete="off" required>
+  <button class="btn" type="submit">Run the free EAA scan</button>
+</form>
+<table><thead><tr><th>{html.escape(table_head[0])}</th><th>{html.escape(table_head[1])}</th></tr></thead>
+<tbody>{rows}</tbody></table>
+<h2>Frequently asked questions</h2>
+<div class="faq">{faq_html}</div>
+<div class="disc">{DISCLAIMER}</div>
+<p style="margin:18px 0 30px"><a class="btn" href="/scan">Scan your store free</a>
+   &nbsp; <a class="btn alt" href="/sample-report">See a sample report</a></p>
+"""
+    log_event("seo_page_view", "/" + slug)
+    return page(body, title=title, desc=desc, canonical="/" + slug, extra_head=_faq_jsonld(faqs))
+
+
+@app.get("/shopify-eaa-readiness-check")
+def seo_eaa_check():
+    return seo_page(
+        "shopify-eaa-readiness-check",
+        "Shopify EAA Readiness Check (Free) - AccessProof EU",
+        "Free check of your Shopify store for common European Accessibility Act (EAA / WCAG) "
+        "issues. Get a dated, independent evidence report in under a minute.",
+        "Shopify EAA readiness check",
+        "The <strong>European Accessibility Act (EAA)</strong> has applied to most online stores "
+        "selling to EU consumers since <strong>28 June 2025</strong>. This free check scans your "
+        "Shopify storefront for common, high-confidence accessibility issues (tied to WCAG and "
+        "EN 301 549) and gives you a dated, independent evidence report. It is not legal advice.",
+        ("What we check", "Why it matters for the EAA"),
+        [("Image alt text (WCAG 1.1.1)", "Screen-reader shoppers can't perceive product images without it"),
+         ("Form field labels (WCAG 4.1.2)", "Search, newsletter and checkout fields must be identifiable"),
+         ("Link & button names (WCAG 4.1.2)", "Icon-only cart and menu controls need accessible names"),
+         ("Page language (WCAG 3.1.1)", "Screen readers need the page language to pronounce content"),
+         ("Page title (WCAG 2.4.2)", "Orientation and tab-switching rely on a meaningful title")],
+        [("Does the EAA apply to my Shopify store?",
+          "If you sell goods or services to consumers in the EU and are not a micro-enterprise "
+          "(fewer than 10 staff and under EUR 2M turnover), the EAA generally applies. Confirm your "
+          "own situation with a qualified advisor."),
+         ("Is an automated scan enough for the EAA?",
+          "No. Automated scans catch many common issues quickly but cannot find every barrier. The "
+          "EAA expects ongoing effort, and a dated monitoring record helps you show that work."),
+         ("Does AccessProof make my store compliant?",
+          "No. AccessProof is an independent evidence and monitoring layer. It helps you find, fix "
+          "and document accessibility - it does not guarantee compliance and is not legal advice."),
+         ("How is this different from an accessibility overlay or widget?",
+          "Overlays sit on top of your site, and overlay compliance claims have been criticised by "
+          "the FTC and EU regulators. AccessProof does not modify your site - it gives you an "
+          "independent, dated record of issues and progress.")],
+        "<p>Run the scan to see your store's high-confidence issues with WCAG references and "
+        "suggested fixes, then keep an independent dated record as you remediate.</p>")
+
+
+@app.get("/eaa-compliance-shopify")
+def seo_eaa_compliance():
+    return seo_page(
+        "eaa-compliance-shopify",
+        "EAA Compliance for Shopify Stores - What to Know - AccessProof EU",
+        "What the European Accessibility Act means for Shopify stores selling to the EU, and how "
+        "independent dated evidence and monitoring help you show good-faith effort.",
+        "EAA compliance for Shopify stores",
+        "The <strong>European Accessibility Act</strong> sets accessibility requirements for "
+        "e-commerce sold to EU consumers, in force since <strong>28 June 2025</strong>. Shopify "
+        "gives you the storefront; making it accessible, and keeping a record of that work, is on "
+        "the merchant. AccessProof provides an independent, dated evidence trail. Not legal advice.",
+        ("Topic", "What to know"),
+        [("In force since", "28 June 2025, across the EU"),
+         ("Who it covers", "Online stores selling to EU consumers (micro-enterprises may be exempt)"),
+         ("Standard referenced", "WCAG 2.1 AA via EN 301 549 (moving toward WCAG 2.2)"),
+         ("What helps your case", "An accessibility statement, ongoing monitoring, dated evidence of remediation"),
+         ("Enforcement so far", "Court orders, regulator inspections and law-firm warning letters have begun")],
+        [("Is Shopify EAA-compliant out of the box?",
+          "No platform makes a store automatically compliant - it depends on your theme, apps, "
+          "content and images. You are responsible for your storefront's accessibility."),
+         ("What should I keep as evidence?",
+          "An accessibility statement, recent scan or audit results, a record of fixes over time, and "
+          "a channel for accessibility feedback. AccessProof produces the dated scan/monitoring part."),
+         ("Will an overlay widget make me compliant?",
+          "Regulators and the FTC have criticised overlay compliance claims, and the EU Commission has "
+          "said overlays are not an adequate substitute for fixing issues at the source."),
+         ("Does AccessProof guarantee compliance?",
+          "No. It is an independent evidence and monitoring tool, not legal advice, and does not "
+          "guarantee compliance.")],
+        "")
+
+
+@app.get("/bfsg-shopify")
+def seo_bfsg():
+    return seo_page(
+        "bfsg-shopify",
+        "BFSG for Shopify (Germany's EAA) - AccessProof EU",
+        "The BFSG is Germany's transposition of the European Accessibility Act. What it means for "
+        "Shopify stores selling to German consumers, and how dated evidence helps.",
+        "BFSG for Shopify stores (Germany)",
+        "The <strong>BFSG (Barrierefreiheitsstaerkungsgesetz)</strong> is Germany's law implementing "
+        "the European Accessibility Act, in force since <strong>28 June 2025</strong>. Germany is a "
+        "notable market because private law firms have begun sending accessibility-related warning "
+        "letters. An independent, dated evidence trail helps you show good-faith effort. Not legal advice.",
+        ("Topic", "What to know"),
+        [("What BFSG is", "Germany's national implementation of the EU Accessibility Act"),
+         ("In force since", "28 June 2025"),
+         ("Who it covers", "Online stores selling to consumers in Germany (small/micro exemptions may apply)"),
+         ("German specific", "Private law-firm warning letters (Abmahnung) are an additional exposure"),
+         ("What helps", "Accessibility statement + ongoing monitoring + dated evidence of fixes")],
+        [("Is BFSG different from the EAA?",
+          "BFSG is Germany's national version of the same EU Accessibility Act, so the accessibility "
+          "expectations are aligned; Germany's enforcement culture is the main difference."),
+         ("What is an Abmahnung?",
+          "A formal warning letter, often from a law firm, asserting a violation. Keeping dated "
+          "evidence of your accessibility work helps you demonstrate good-faith effort."),
+         ("Does AccessProof provide legal advice?",
+          "No. AccessProof is an independent evidence and monitoring layer, not a law firm, and it "
+          "does not guarantee compliance.")],
+        "")
+
+
+@app.get("/shopify-accessibility-monitoring")
+def seo_monitoring():
+    return seo_page(
+        "shopify-accessibility-monitoring",
+        "Shopify Accessibility Monitoring & Evidence Reports - AccessProof EU",
+        "Continuous accessibility monitoring for Shopify stores: monthly automated scans and dated, "
+        "independent evidence reports that track regressions over time.",
+        "Shopify accessibility monitoring",
+        "A one-time audit goes stale the moment you change a theme, add an app, or upload new "
+        "products. <strong>Continuous monitoring</strong> re-scans your Shopify store on a schedule, "
+        "tracks regressions, and produces a <strong>dated, independent evidence report</strong> of "
+        "the accessibility work you are doing. Not legal advice; not an overlay.",
+        ("Capability", "What you get"),
+        [("Monthly automated scan", "High-confidence checks across your storefront"),
+         ("Regression tracking", "Catch new high-severity issues after a theme or app change"),
+         ("Dated evidence report", "A time-stamped, independent record of issues and progress"),
+         ("No overlay", "We don't modify your site; we measure and document it"),
+         ("Portfolio option", "Agencies can monitor many client stores from one place")],
+        [("Why monitor instead of a one-time audit?",
+          "Accessibility drifts as your store changes. Monitoring keeps your evidence current and "
+          "shows ongoing effort, which is what the EAA expects."),
+         ("What is in the evidence report?",
+          "A dated score, the issues found with WCAG references and suggested fixes, and your history "
+          "over time so you can show progress."),
+         ("Can agencies monitor multiple stores?",
+          "Yes. Portfolio plans cover multiple client stores with an independent dated report for each."),
+         ("Does monitoring guarantee compliance?",
+          "No. It is an independent evidence tool, not legal advice, and does not guarantee compliance.")],
+        "")
+
+
+@app.get("/sitemap.xml")
+def sitemap():
+    paths = ["/", "/shopify-eaa-readiness-check", "/eaa-compliance-shopify",
+             "/bfsg-shopify", "/shopify-accessibility-monitoring", "/sample-report"]
+    today = datetime.date.today().isoformat()
+    urls = "".join(
+        f"<url><loc>{SITE_URL}{p}</loc><lastmod>{today}</lastmod>"
+        f"<changefreq>weekly</changefreq></url>" for p in paths)
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + urls + "</urlset>")
+    return Response(xml, mimetype="application/xml")
+
+
+@app.get("/robots.txt")
+def robots():
+    return Response(f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}/sitemap.xml\n",
+                    mimetype="text/plain")
 
 
 if __name__ == "__main__":
